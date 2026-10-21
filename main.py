@@ -1,18 +1,8 @@
-import os
-import sys
 import time
 import requests
 from google import genai
 
-# فعال‌سازی انکودینگ UTF-8 برای نمایش درست زبان فارسی در ترمینال ویندوز
-if sys.platform == "win32":
-    try:
-        os.system("chcp 65001 > nul")
-        sys.stdout.reconfigure(encoding='utf-8')
-    except Exception:
-        pass
-
-# --- تنظیمات Gemini (کلیدهای چرخشی) ---
+# --- 1. Gemini AI Setup (Key Rotation) ---
 GEMINI_KEYS = [
     "AQ.Ab8RN6KgPtXVqlewAUNIEFSMbL0sKDaBn7HIYXHvmCjD89e5RQ",
     "AQ.Ab8RN6KxMC69YosMxNf2iDotkUsdui1i5LfzT51A4hAHBw5ajA",
@@ -26,47 +16,51 @@ def get_ai_client():
     current_key_idx = (current_key_idx + 1) % len(GEMINI_KEYS)
     return genai.Client(api_key=key)
 
-# --- تنظیمات Toobit ---
-BASE_URL = "https://api.toobit.com"
-
-def get_top_50_tickers():
+# --- 2. Free Global Market Data Fetcher ---
+def get_top_50_crypto():
+    """
+    Fetches Top 50 Cryptocurrencies live data globally (TradingView / CoinMarketCap standard)
+    """
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {
+        'vs_currency': 'usd',
+        'order': 'market_cap_desc',
+        'per_page': 50,
+        'page': 1,
+        'sparkline': False
+    }
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
     try:
-        url = f"{BASE_URL}/api/v1/ticker/24hr"
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        # بررسی وضعیت پاسخ سرور
-        if response.status_code != 200:
-            print(f"❌ خطا در اتصال به توبیت! کد وضعیت سرور: {response.status_code}")
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"[!] Server returned status code: {response.status_code}")
             return []
-            
-        res = response.json()
-        usdt_pairs = [item for item in res if item.get('symbol', '').endswith('USDT')][:50]
-        return usdt_pairs
-    except requests.exceptions.RequestException as e:
-        print(f"❌ خطای شبکه یا فیلترینگ در اتصال به توبیت: {e}")
-        return []
     except Exception as e:
-        print(f"❌ خطای پردازش داده‌های توبیت: {e}")
+        print(f"[!] Network Error: {e}")
         return []
 
-def analyze_with_gemini(symbol, sample_price):
+# --- 3. Gemini Scalping Analysis ---
+def analyze_with_gemini(symbol, price, change_24h):
     try:
         client = get_ai_client()
         prompt = f"""
-        شما یک معامله‌گر حرفه‌ای نوسان‌گیری (Scalper) هستید.
-        جفت‌ارز: {symbol} | قیمت لحظه‌ای: {sample_price}
+        You are an expert crypto scalper trader.
+        Symbol: {symbol.upper()}USDT
+        Current Price: ${price}
+        24h Price Change: {change_24h}%
         
-        لطفاً بررسی کنید آیا وضعیت برای ورود آنی مناسب است؟
-        پاسخ را فقط در قالب JSON با این کلیدها ارسال کن:
+        Analyze if this coin is good for an immediate scalp trade.
+        Respond ONLY in JSON format:
         {{
-            "decision": "BUY" یا "SELL" یا "WAIT",
-            "entry_price": {sample_price},
-            "stop_loss": حد_ضرر_پیشنهادی,
-            "take_profit": حد_سود_پیشنهادی,
-            "reason": "دلیل کوتاه به فارسی"
+            "decision": "BUY", "SELL", or "WAIT",
+            "entry_price": {price},
+            "stop_loss": calculated_stop_loss_price,
+            "take_profit": calculated_take_profit_price,
+            "reason": "Short explanation of the setup"
         }}
         """
         response = client.models.generate_content(
@@ -75,36 +69,41 @@ def analyze_with_gemini(symbol, sample_price):
         )
         return response.text
     except Exception as e:
-        print(f"⚠️ خطا در استعلام از Gemini: {e}")
+        print(f"[!] Gemini AI Error: {e}")
         return None
 
+# --- 4. Main Engine (Paper Trading) ---
 def main_loop():
     print("==================================================")
-    print("🚀 ربات اسکنر نوسان‌گیری توبیت (Paper Trading)")
+    print("      CRYPTO SCALPER BOT - PAPER TRADING          ")
     print("==================================================")
+    print("[+] Connecting to Global Crypto Data Center...")
     
-    tickers = get_top_50_tickers()
-    if not tickers:
-        print("\n⚠️ هیچ ارزی دریافت نشد. لطفاً اتصال اینترنت یا ابزار تغییر IP را بررسی کنید.")
+    coins = get_top_50_crypto()
+    if not coins:
+        print("[!] Failed to fetch market data. Please check internet connection.")
         return
 
-    print(f"📊 {len(tickers)} ارز برتر دریافت شد. شروع بررسی ۳ ارز اول...\n")
+    print(f"[+] Successfully loaded TOP {len(coins)} Coins.")
+    print("[+] Scanning Top 3 Coins for Scalp Signals...\n")
     
-    for coin in tickers[:3]:
-        symbol = coin['symbol']
-        price = coin['lastPrice']
-        print(f"🔍 در حال آنالیز {symbol} (قیمت: ${price})...")
+    for coin in coins[:3]:
+        symbol = coin['symbol'].upper() + "USDT"
+        price = coin['current_price']
+        change = coin['price_change_percentage_24h']
         
-        analysis = analyze_with_gemini(symbol, price)
+        print(f"[*] Analyzing {symbol} | Price: ${price} | 24h Change: {change:.2f}%")
+        
+        analysis = analyze_with_gemini(symbol, price, change)
         if analysis:
-            print(f"🤖 پاسخ هوش مصنوعی:\n{analysis}\n")
+            print(f"[🤖 AI Decision]:\n{analysis}\n")
         time.sleep(1)
 
 if __name__ == "__main__":
     try:
         main_loop()
     except Exception as e:
-        print(f"\n❌ خطای غیرمنتظره: {e}")
+        print(f"\n[!] Unexpected Error: {e}")
     
-    print("\n==================================================")
-    input("برای خروج، کلید Enter را روی کیبورد فشار دهید...")
+    print("==================================================")
+    input("Press Enter to close window...")
